@@ -19,7 +19,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Custom Indicator"
 #property link      ""
-#property version   "1.00"
+#property version   "1.01"
 #property strict
 #property indicator_chart_window
 
@@ -508,7 +508,7 @@ bool ApplyLine(const string name, string &parts[], const int n, const bool isMir
    int    anchor = (int)StringToInteger(parts[f]); f++;
    double angle  = StringToDouble(parts[f]);       f++;
    double dev    = StringToDouble(parts[f]);       f++;
-   int    scale  = (int)StringToInteger(parts[f]); f++;
+   double scale  = StringToDouble(parts[f]);       f++;   // Gann/Fibo scale is a DOUBLE property
    int    arrow  = (int)StringToInteger(parts[f]); f++;
    int    fsize  = (int)StringToInteger(parts[f]); f++;
    string font   = (f < n) ? Unescape(parts[f]) : "Arial";  f++;
@@ -545,7 +545,7 @@ bool ApplyLine(const string name, string &parts[], const int n, const bool isMir
       ObjectSetDouble(0, name, OBJPROP_DEVIATION, dev);
 
    if(HasScale(type))
-      ObjectSetInteger(0, name, OBJPROP_SCALE, scale);
+      ObjectSetDouble(0, name, OBJPROP_SCALE, scale);
 
    if(IsArrowType(type))
       ObjectSetInteger(0, name, OBJPROP_ARROWCODE, arrow);
@@ -622,8 +622,8 @@ string BuildSignature(const string name)
                                     ? ObjectGetDouble(0, name, OBJPROP_ANGLE) : 0.0, 4);
    s += FIELD_SEP + DoubleToString((type == OBJ_STDDEVCHANNEL)
                                     ? ObjectGetDouble(0, name, OBJPROP_DEVIATION) : 0.0, 4);
-   s += FIELD_SEP + IntegerToString(HasScale(type)
-                                    ? ObjectGetInteger(0, name, OBJPROP_SCALE) : 0);
+   s += FIELD_SEP + DoubleToString(HasScale(type)
+                                    ? ObjectGetDouble(0, name, OBJPROP_SCALE) : 0.0, 4);
    s += FIELD_SEP + IntegerToString(IsArrowType(type)
                                     ? ObjectGetInteger(0, name, OBJPROP_ARROWCODE) : 0);
    s += FIELD_SEP + IntegerToString((type == OBJ_TEXT)
@@ -976,7 +976,6 @@ int PivotCount(const int type)
       // two anchors
       case OBJ_TREND:              return 2;
       case OBJ_TRENDBYANGLE:       return 2;
-      case OBJ_ARROWED_LINE:       return 2;
       case OBJ_CYCLES:             return 2;
       case OBJ_RECTANGLE:          return 2;
       case OBJ_STDDEVCHANNEL:      return 2;
@@ -1107,7 +1106,7 @@ string MirrorNameFor(const string uid)
 // Small stable 31 bit hash (FNV style), same result on every chart
 long SimpleHash(const string s)
 {
-   long h   = 2166136261;
+   long h   = (long)2166136261;
    int  len = StringLen(s);
 
    for(int i = 0; i < len; i++)

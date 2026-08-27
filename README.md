@@ -118,4 +118,10 @@ reopen.
 
 ---
 
-Version 1.00
+Version 1.01
+
+## Changelog
+
+**1.01** - fixed two compile errors: an object type constant that only exists in MT5 (`OBJ_ARROWED_LINE` - MT4 has no arrowed line tool), and the Gann/Fibo `OBJPROP_SCALE` property being read and written as an integer when MT4 defines it as a double.
+
+**1.00** - first release.
