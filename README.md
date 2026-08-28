@@ -49,7 +49,7 @@ the ignore list and it is excluded outright.
 | Setting | Default | What it does |
 |---|---|---|
 | Sync Channel Name | `ObjSync` | Charts sharing a channel name sync together. Change it to run two independent groups. |
-| Sync only between charts of the SAME symbol | `true` | EURUSD charts sync with EURUSD charts only. Turn off to sync everything. |
+| Keep every symbol separate | `true` | **Leave this on.** EURUSD charts sync with EURUSD charts only, GBPUSD with GBPUSD, and so on — across all timeframes of that symbol. It does *not* restrict syncing between timeframes. Turning it off puts every symbol into one shared pool, so a line drawn on EURUSD will also appear on GBPUSD. |
 | Share between separate MT4 terminals | `false` | Uses the shared `Common` folder so two MT4 installations can sync. |
 
 ### Behaviour
@@ -96,8 +96,13 @@ listing every synced object with a revision number. When you change something,
 that chart bumps the revision and writes it; the other charts notice a higher
 revision and apply it. A lock file makes sure two charts never write at once.
 
-Copies are named `OSync_<chart id>@<original name>` so it is always obvious in
-the object list (Ctrl+B) which chart an object came from.
+Copies are named `OSync_<symbol>#<chart id>@<original name>` so it is always
+obvious in the object list (Ctrl+B) which symbol and which chart an object came
+from. The symbol is part of the id itself, so a chart can never re-label
+another chart's object with its own symbol.
+
+Any object starting with `OSync_` that the register no longer accounts for is
+removed automatically, so stray copies clean themselves up.
 
 Deleting the copy on any chart deletes the original too — a delete is recorded
 as a tombstone so charts that were closed at the time still catch up when they
@@ -109,18 +114,24 @@ reopen.
 
 * **Nothing syncs at all** — the indicator has to be on *both* charts, and the
   Sync Channel Name must match.
-* **Charts on different symbols do not sync** — that is the default. Turn off
-  *Sync only between charts of the SAME symbol*.
-* **A leftover copy is stuck on a chart** — Ctrl+B, delete anything starting
-  with `OSync_`, then reload the indicator.
+* **An object appears on a chart of a different symbol** — *Keep every symbol
+  separate* has been switched off. Turn it back on, on every chart. Any copies
+  already sitting on the wrong charts are cleared automatically within a second
+  of reloading.
+* **I want different symbols to share objects** — turn *Keep every symbol
+  separate* off. That is what it is for.
+* **A leftover copy is stuck on a chart** — reload the indicator, it is removed
+  automatically. Otherwise Ctrl+B and delete anything starting with `OSync_`.
 * **Anything else** — turn on *Write detail to the Experts log*, reproduce it,
   and send me the Experts tab contents.
 
 ---
 
-Version 1.01
+Version 1.02
 
 ## Changelog
+
+**1.02** - symbol separation hardened. The origin symbol is now part of the object id itself and travels with the object, so a chart holding a copy can no longer re-stamp it with its own symbol - that was the one path by which an object could spread to another symbol. The symbol filter now trusts the id rather than the register column, symbol names are made file-name safe, and copies the register no longer accounts for are swept off the chart automatically, which clears any strays left by an earlier version. The register file format is unchanged.
 
 **1.01** - fixed two compile errors: an object type constant that only exists in MT5 (`OBJ_ARROWED_LINE` - MT4 has no arrowed line tool), and the Gann/Fibo `OBJPROP_SCALE` property being read and written as an integer when MT4 defines it as a double.
 

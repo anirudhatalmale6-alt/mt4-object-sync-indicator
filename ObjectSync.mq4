@@ -19,7 +19,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Custom Indicator"
 #property link      ""
-#property version   "1.01"
+#property version   "1.02"
 #property strict
 #property indicator_chart_window
 
@@ -27,7 +27,7 @@
 //| SYNC SCOPE                                                        |
 //+------------------------------------------------------------------+
 input string InpChannelName        = "ObjSync";   // Sync Channel Name (must match on all charts)
-input bool   InpSameSymbolOnly     = true;        // Sync only between charts of the SAME symbol
+input bool   InpSameSymbolOnly     = true;        // Keep every symbol separate (leave TRUE)
 input bool   InpUseCommonFolder    = false;       // Share between separate MT4 terminals
 
 //+------------------------------------------------------------------+
@@ -61,6 +61,7 @@ struct ManagedObj
    string sig;         // last known property signature
    long   rev;         // last known revision
    bool   isMirror;    // true = copy of an object owned by another chart
+   string originSym;   // symbol of the chart the object was DRAWN on
 };
 
 ManagedObj g_mgd[];
@@ -93,8 +94,10 @@ int OnInit()
    g_chartId        = ChartID();
    g_fileFlagCommon = InpUseCommonFolder ? FILE_COMMON : 0;
 
-   // Registry lives per channel, and per symbol when symbol scoping is on
-   string scope = InpSameSymbolOnly ? Symbol() : "ALL";
+   // Registry lives per channel, and per symbol when symbol scoping is on.
+   // The symbol goes through SafeFile() because some brokers use characters
+   // in symbol names that are not legal in a file name.
+   string scope = InpSameSymbolOnly ? SafeFile(Symbol()) : "ALL";
    g_regFile    = InpChannelName + "_" + scope + ".csv";
    g_lockFile   = InpChannelName + "_" + scope + ".lck";
 
@@ -123,7 +126,8 @@ int OnInit()
    EventSetMillisecondTimer(ms);
 
    Print("ObjectSync: started on ", Symbol(), " ", TimeframeString(),
-         "  channel=", InpChannelName, "  registry=", g_regFile);
+         "  channel=", InpChannelName, "  registry=", g_regFile,
+         "  scope=", (InpSameSymbolOnly ? "THIS SYMBOL ONLY" : "ALL SYMBOLS SHARED"));
 
    return(INIT_SUCCEEDED);
 }
@@ -274,7 +278,8 @@ void SyncCycle()
          pendSig[pendCount]  = "";
          pendRev[pendCount]  = g_mgd[i].rev + 1;
          pendDel[pendCount]  = true;
-         pendLine[pendCount] = BuildRegistryLine(g_mgd[i].uid, true, g_mgd[i].rev + 1, "");
+         pendLine[pendCount] = BuildRegistryLine(g_mgd[i].uid, true, g_mgd[i].rev + 1, "",
+                                                g_mgd[i].originSym);
          pendCount++;
          continue;
       }
@@ -288,7 +293,8 @@ void SyncCycle()
       pendSig[pendCount]  = sig;
       pendRev[pendCount]  = g_mgd[i].rev + 1;
       pendDel[pendCount]  = false;
-      pendLine[pendCount] = BuildRegistryLine(g_mgd[i].uid, false, g_mgd[i].rev + 1, sig);
+      pendLine[pendCount] = BuildRegistryLine(g_mgd[i].uid, false, g_mgd[i].rev + 1, sig,
+                                              g_mgd[i].originSym);
       pendCount++;
    }
 
@@ -360,10 +366,44 @@ void SyncCycle()
    // ---- 3. apply everything from the registry to this chart ----------
    bool touched = ApplyRegistry(lines, lineCount);
 
+   // ---- 4. sweep up copies that no longer belong on this chart -------
+   if(PurgeOrphanMirrors())
+      touched = true;
+
    if(touched || dirty)
       ChartRedraw(0);
 
    g_busy = false;
+}
+
+//+------------------------------------------------------------------+
+//| Delete copies sitting on this chart that the registry no longer    |
+//| accounts for - a copy of another symbol's object left behind by an |
+//| earlier version, or a leftover from a chart that has since closed. |
+//|                                                                   |
+//| Only ever touches objects named with the OSync_ prefix, which are  |
+//| created by this indicator and by nothing else.                     |
+//+------------------------------------------------------------------+
+bool PurgeOrphanMirrors()
+{
+   bool removed = false;
+
+   int total = ObjectsTotal(0, -1, -1);
+   for(int i = total - 1; i >= 0; i--)
+   {
+      string name = ObjectName(0, i);
+
+      if(StringFind(name, MIRROR_PREFIX) != 0)  continue;   // not one of ours
+      if(FindManagedByLocal(name) >= 0)         continue;   // still accounted for
+
+      ObjectDelete(0, name);
+      removed = true;
+
+      if(InpVerboseLog)
+         Print("ObjectSync: removed stray copy ", name, " - not for ", Symbol());
+   }
+
+   return removed;
 }
 
 //+------------------------------------------------------------------+
@@ -383,6 +423,12 @@ bool ApplyRegistry(string &lines[], const int lineCount)
       string symbol  = parts[1];
       bool   deleted = (parts[2] == "1");
       long   rev     = StringToInteger(parts[3]);
+
+      // Origin symbol: prefer the one baked into the uid, because that one
+      // cannot be rewritten by another chart. Fall back to the symbol column
+      // for registry lines written by version 1.01 and earlier.
+      string uidSym = SymbolFromUid(uid);
+      if(uidSym != "") symbol = uidSym;
 
       if(InpSameSymbolOnly && symbol != Symbol())
          continue;
@@ -415,7 +461,7 @@ bool ApplyRegistry(string &lines[], const int lineCount)
             {
                // rev 0 so that whatever is in the registry wins on the next
                // pass - the other charts may have moved it while we were off
-               AddManaged(uid, original, BuildSignature(original), 0, false);
+               AddManaged(uid, original, BuildSignature(original), 0, false, symbol);
                continue;
             }
          }
@@ -424,7 +470,7 @@ bool ApplyRegistry(string &lines[], const int lineCount)
          string mirror = MirrorNameFor(uid);
          if(ApplyLine(mirror, parts, n, true))
          {
-            AddManaged(uid, mirror, BuildSignature(mirror), rev, true);
+            AddManaged(uid, mirror, BuildSignature(mirror), rev, true, symbol);
             touched = true;
             if(InpVerboseLog) Print("ObjectSync: created copy ", mirror);
          }
@@ -653,10 +699,17 @@ string BuildSignature(const string name)
 //| Compose a full registry line                                      |
 //+------------------------------------------------------------------+
 string BuildRegistryLine(const string uid, const bool deleted,
-                         const long rev, const string payload)
+                         const long rev, const string payload,
+                         const string originSym)
 {
+   // The symbol written here is the symbol of the chart the object was DRAWN
+   // on, never Symbol() of whoever happens to be republishing it. A chart
+   // holding a copy must not be able to re-label somebody else's object with
+   // its own symbol - that is what used to let an object leak across symbols.
+   string sym = (originSym == "" ? Symbol() : originSym);
+
    string line = uid
-               + FIELD_SEP + Symbol()
+               + FIELD_SEP + sym
                + FIELD_SEP + (deleted ? "1" : "0")
                + FIELD_SEP + IntegerToString(rev)
                + FIELD_SEP + IntegerToString((long)TimeCurrent())
@@ -782,7 +835,8 @@ int FindLineByUid(string &lines[], const int count, const string uid)
 //| MANAGED LIST HELPERS                                              |
 //+------------------------------------------------------------------+
 void AddManaged(const string uid, const string localName,
-                const string sig, const long rev, const bool isMirror)
+                const string sig, const long rev, const bool isMirror,
+                const string originSym)
 {
    ArrayResize(g_mgd, g_mgdCount + 1);
    g_mgd[g_mgdCount].uid       = uid;
@@ -790,6 +844,7 @@ void AddManaged(const string uid, const string localName,
    g_mgd[g_mgdCount].sig       = sig;
    g_mgd[g_mgdCount].rev       = rev;
    g_mgd[g_mgdCount].isMirror  = isMirror;
+   g_mgd[g_mgdCount].originSym = (originSym == "" ? Symbol() : originSym);
    g_mgdCount++;
 }
 
@@ -804,6 +859,7 @@ void RemoveManagedAt(const int idx)
       g_mgd[i].sig       = g_mgd[i + 1].sig;
       g_mgd[i].rev       = g_mgd[i + 1].rev;
       g_mgd[i].isMirror  = g_mgd[i + 1].isMirror;
+      g_mgd[i].originSym = g_mgd[i + 1].originSym;
    }
 
    g_mgdCount--;
@@ -865,14 +921,16 @@ void Adopt(const string name)
    string sig = BuildSignature(name);
    if(sig == "") return;
 
-   string uid = IntegerToString(g_chartId) + "@" + SafeName(name);
+   // The symbol is baked into the uid so the object carries its own origin
+   // symbol wherever it travels, independent of the registry symbol column.
+   string uid = Symbol() + "#" + IntegerToString(g_chartId) + "@" + SafeName(name);
    if(FindManagedByUid(uid) >= 0) return;
 
    // Registered with an EMPTY signature and revision 0 on purpose: that way
    // the next sync cycle sees a difference and publishes the object. Storing
    // the real signature here would make it look already-in-sync and it would
    // never reach the other charts until you moved it.
-   AddManaged(uid, name, "", 0, false);
+   AddManaged(uid, name, "", 0, false, Symbol());
 
    if(InpVerboseLog) Print("ObjectSync: adopted ", name, " as ", uid);
 }
@@ -1140,7 +1198,65 @@ long OriginChartFromUid(const string uid)
 {
    int at = StringFind(uid, "@");
    if(at < 0) return 0;
-   return StringToInteger(StringSubstr(uid, 0, at));
+
+   string head = StringSubstr(uid, 0, at);   // "<symbol>#<chartId>" or "<chartId>"
+
+   int hash = LastHash(head);
+   if(hash >= 0)
+      head = StringSubstr(head, hash + 1);
+
+   return StringToInteger(head);
+}
+
+//+------------------------------------------------------------------+
+//| Origin symbol out of a uid. Empty for pre-1.02 uids.              |
+//+------------------------------------------------------------------+
+string SymbolFromUid(const string uid)
+{
+   int at = StringFind(uid, "@");
+   if(at < 0) return "";
+
+   string head = StringSubstr(uid, 0, at);
+
+   int hash = LastHash(head);
+   if(hash <= 0) return "";                 // old style uid, no symbol in it
+   return StringSubstr(head, 0, hash);
+}
+
+//+------------------------------------------------------------------+
+//| Position of the LAST '#' in a string, -1 if none.                 |
+//| Last, not first, because a broker symbol may itself contain one   |
+//| (#US30, #AAPL) and the chart id sits after the final separator.   |
+//+------------------------------------------------------------------+
+int LastHash(const string s)
+{
+   ushort mark = (ushort)StringGetCharacter("#", 0);
+
+   for(int i = StringLen(s) - 1; i >= 0; i--)
+      if((ushort)StringGetCharacter(s, i) == mark)
+         return i;
+
+   return -1;
+}
+
+//+------------------------------------------------------------------+
+//| Strip characters that are not legal in a file name                |
+//+------------------------------------------------------------------+
+string SafeFile(const string s)
+{
+   string r = s;
+   StringReplace(r, "\\", "_");
+   StringReplace(r, "/",  "_");
+   StringReplace(r, ":",  "_");
+   StringReplace(r, "*",  "_");
+   StringReplace(r, "?",  "_");
+   StringReplace(r, "\"", "_");
+   StringReplace(r, "<",  "_");
+   StringReplace(r, ">",  "_");
+   StringReplace(r, "|",  "_");
+   StringReplace(r, " ",  "_");
+   if(r == "") r = "SYM";
+   return r;
 }
 
 string TimeframeString()
