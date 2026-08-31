@@ -19,7 +19,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Custom Indicator"
 #property link      ""
-#property version   "1.02"
+#property version   "1.03"
 #property strict
 #property indicator_chart_window
 
@@ -40,6 +40,41 @@ input bool   InpLockMirrors        = false;       // Make copied objects non-sel
 input int    InpTombstoneHours     = 24;          // Keep delete records for N hours
 
 //+------------------------------------------------------------------+
+//| APPEARANCE                                                        |
+//|                                                                   |
+//| Colour and thickness follow the timeframe the object was DRAWN on, |
+//| not the chart it is being shown on. Draw a line on H1 and it is    |
+//| the H1 colour on every chart, so you can always tell at a glance   |
+//| which timeframe a level came from.                                 |
+//|                                                                   |
+//| Set a colour to None to leave objects from that timeframe in       |
+//| whatever colour you drew them. Set a thickness to 0 to leave the   |
+//| thickness alone.                                                  |
+//+------------------------------------------------------------------+
+input bool   InpDrawBehind         = true;        // Keep synced objects behind panels and dashboards
+input bool   InpUseTfStyle         = true;        // Colour / thickness by the timeframe drawn on
+input bool   InpTfStyleLevels      = false;       // Also recolour Fibo / Gann level lines
+
+input color  InpColorM1            = clrGray;         // M1  colour
+input int    InpWidthM1            = 1;               // M1  thickness (pixels, 0 = leave alone)
+input color  InpColorM5            = clrSilver;       // M5  colour
+input int    InpWidthM5            = 1;               // M5  thickness (pixels, 0 = leave alone)
+input color  InpColorM15           = clrAqua;         // M15 colour
+input int    InpWidthM15           = 1;               // M15 thickness (pixels, 0 = leave alone)
+input color  InpColorM30           = clrDeepSkyBlue;  // M30 colour
+input int    InpWidthM30           = 1;               // M30 thickness (pixels, 0 = leave alone)
+input color  InpColorH1            = clrLime;         // H1  colour
+input int    InpWidthH1            = 1;               // H1  thickness (pixels, 0 = leave alone)
+input color  InpColorH4            = clrYellow;       // H4  colour
+input int    InpWidthH4            = 2;               // H4  thickness (pixels, 0 = leave alone)
+input color  InpColorD1            = clrOrange;       // D1  colour
+input int    InpWidthD1            = 2;               // D1  thickness (pixels, 0 = leave alone)
+input color  InpColorW1            = clrRed;          // W1  colour
+input int    InpWidthW1            = 3;               // W1  thickness (pixels, 0 = leave alone)
+input color  InpColorMN1           = clrMagenta;      // MN  colour
+input int    InpWidthMN1           = 3;               // MN  thickness (pixels, 0 = leave alone)
+
+//+------------------------------------------------------------------+
 //| SAFETY                                                            |
 //+------------------------------------------------------------------+
 input string InpIgnorePrefixes     = "BtnGrid_,NotePanel_,EA_,#,__";  // Never sync names starting with (comma separated)
@@ -52,6 +87,8 @@ input bool   InpVerboseLog         = false;       // Write detail to the Experts
 #define MIRROR_PREFIX  "OSync_"
 #define MAX_LEVELS     32
 #define FIELD_SEP      ";"
+#define TF_TAG         "TF="
+#define TF_NO_COLOR    ((int)clrNONE)   // "leave the colour alone"
 
 // One entry per object this indicator manages on THIS chart
 struct ManagedObj
@@ -62,6 +99,7 @@ struct ManagedObj
    long   rev;         // last known revision
    bool   isMirror;    // true = copy of an object owned by another chart
    string originSym;   // symbol of the chart the object was DRAWN on
+   int    originTf;    // period (in minutes) of the chart it was DRAWN on, 0 = unknown
 };
 
 ManagedObj g_mgd[];
@@ -127,7 +165,9 @@ int OnInit()
 
    Print("ObjectSync: started on ", Symbol(), " ", TimeframeString(),
          "  channel=", InpChannelName, "  registry=", g_regFile,
-         "  scope=", (InpSameSymbolOnly ? "THIS SYMBOL ONLY" : "ALL SYMBOLS SHARED"));
+         "  scope=", (InpSameSymbolOnly ? "THIS SYMBOL ONLY" : "ALL SYMBOLS SHARED"),
+         "  background=", (InpDrawBehind ? "yes" : "no"),
+         "  timeframe colours=", (InpUseTfStyle ? "on" : "off"));
 
    return(INIT_SUCCEEDED);
 }
@@ -279,10 +319,17 @@ void SyncCycle()
          pendRev[pendCount]  = g_mgd[i].rev + 1;
          pendDel[pendCount]  = true;
          pendLine[pendCount] = BuildRegistryLine(g_mgd[i].uid, true, g_mgd[i].rev + 1, "",
-                                                g_mgd[i].originSym);
+                                                g_mgd[i].originSym, g_mgd[i].originTf);
          pendCount++;
          continue;
       }
+
+      // --- enforce the local look before reading the object back ---------
+      //
+      // Done BEFORE the signature is taken, so the background flag and the
+      // timeframe colour become part of what gets published rather than
+      // showing up as a change on the very next cycle.
+      StyleLocal(name, g_mgd[i].originTf);
 
       // --- object still there, did it move or change? ---
       string sig = BuildSignature(name);
@@ -294,7 +341,7 @@ void SyncCycle()
       pendRev[pendCount]  = g_mgd[i].rev + 1;
       pendDel[pendCount]  = false;
       pendLine[pendCount] = BuildRegistryLine(g_mgd[i].uid, false, g_mgd[i].rev + 1, sig,
-                                              g_mgd[i].originSym);
+                                              g_mgd[i].originSym, g_mgd[i].originTf);
       pendCount++;
    }
 
@@ -433,6 +480,18 @@ bool ApplyRegistry(string &lines[], const int lineCount)
       if(InpSameSymbolOnly && symbol != Symbol())
          continue;
 
+      // Timeframe the object was drawn on, and where the properties start.
+      // Version 1.02 and earlier have no timeframe field, so the properties
+      // begin one field earlier and the origin timeframe is unknown (0),
+      // which simply leaves the colour as it was drawn.
+      int originTf = 0;
+      int base     = 6;
+      if(n > 6 && StringFind(parts[6], TF_TAG) == 0)
+      {
+         originTf = (int)StringToInteger(StringSubstr(parts[6], StringLen(TF_TAG)));
+         base     = 7;
+      }
+
       int m = FindManagedByUid(uid);
 
       // ---------- not currently managed here ----------
@@ -459,18 +518,25 @@ bool ApplyRegistry(string &lines[], const int lineCount)
             string original = OriginalNameFromUid(uid);
             if(original != "" && ObjectFind(0, original) >= 0)
             {
+               // Look enforced BEFORE the signature is taken. The stored
+               // signature has to match what the object actually looks like,
+               // otherwise the next cycle would read a difference and publish
+               // it at revision 1 - overwriting a higher revision that the
+               // other charts had produced while this one was closed.
+               StyleLocal(original, originTf);
+
                // rev 0 so that whatever is in the registry wins on the next
                // pass - the other charts may have moved it while we were off
-               AddManaged(uid, original, BuildSignature(original), 0, false, symbol);
+               AddManaged(uid, original, BuildSignature(original), 0, false, symbol, originTf);
                continue;
             }
          }
 
          // Build a copy of somebody else's object
          string mirror = MirrorNameFor(uid);
-         if(ApplyLine(mirror, parts, n, true))
+         if(ApplyLine(mirror, parts, n, base, originTf, true))
          {
-            AddManaged(uid, mirror, BuildSignature(mirror), rev, true, symbol);
+            AddManaged(uid, mirror, BuildSignature(mirror), rev, true, symbol, originTf);
             touched = true;
             if(InpVerboseLog) Print("ObjectSync: created copy ", mirror);
          }
@@ -491,7 +557,7 @@ bool ApplyRegistry(string &lines[], const int lineCount)
          continue;
       }
 
-      if(ApplyLine(g_mgd[m].localName, parts, n, g_mgd[m].isMirror))
+      if(ApplyLine(g_mgd[m].localName, parts, n, base, originTf, g_mgd[m].isMirror))
       {
          g_mgd[m].rev = rev;
          g_mgd[m].sig = BuildSignature(g_mgd[m].localName);
@@ -506,9 +572,10 @@ bool ApplyRegistry(string &lines[], const int lineCount)
 //+------------------------------------------------------------------+
 //| Create / update a local object from a registry line               |
 //+------------------------------------------------------------------+
-bool ApplyLine(const string name, string &parts[], const int n, const bool isMirror)
+bool ApplyLine(const string name, string &parts[], const int n,
+               const int base, const int originTf, const bool isMirror)
 {
-   int f = 6;                                   // first property field
+   int f = base;                                // first property field
    if(n <= f + 1) return false;
 
    int type   = (int)StringToInteger(parts[f]);   f++;
@@ -631,8 +698,125 @@ bool ApplyLine(const string name, string &parts[], const int n, const bool isMir
       }
    }
 
+   // Local look last, so it wins over whatever the line carried
+   StyleLocal(name, originTf);
+
    ResetLastError();
    return true;
+}
+
+//+------------------------------------------------------------------+
+//| Force the local look of a managed object.                         |
+//|                                                                   |
+//| Two things live here:                                             |
+//|                                                                   |
+//|  * the background flag, which is what puts an object BEHIND a     |
+//|    dashboard or panel instead of over the top of it. MT4 has no    |
+//|    z-order for chart objects - background or foreground is the     |
+//|    only control there is.                                          |
+//|  * the colour and thickness for the timeframe the object was DRAWN |
+//|    on. Every chart works this out from the same origin timeframe,  |
+//|    so every chart lands on the same colour and the setting cannot  |
+//|    start a tug of war between charts.                              |
+//|                                                                   |
+//| Returns true if anything actually changed.                        |
+//+------------------------------------------------------------------+
+bool StyleLocal(const string name, const int originTf)
+{
+   if(ObjectFind(0, name) < 0) return false;
+
+   bool changed = false;
+
+   if(InpDrawBehind && ObjectGetInteger(0, name, OBJPROP_BACK) == 0)
+   {
+      ObjectSetInteger(0, name, OBJPROP_BACK, true);
+      changed = true;
+   }
+
+   if(!InpUseTfStyle || originTf <= 0)
+      return changed;
+
+   int clr = TfColor(originTf);
+   int wid = TfWidth(originTf);
+
+   if(clr != TF_NO_COLOR && (int)ObjectGetInteger(0, name, OBJPROP_COLOR) != clr)
+   {
+      ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+      changed = true;
+   }
+
+   if(wid > 0 && (int)ObjectGetInteger(0, name, OBJPROP_WIDTH) != wid)
+   {
+      ObjectSetInteger(0, name, OBJPROP_WIDTH, wid);
+      changed = true;
+   }
+
+   // Fibo / Gann level lines carry their own colours and widths. Left alone
+   // by default - the standard Fibonacci colours are usually wanted.
+   if(InpTfStyleLevels)
+   {
+      int nlev = (int)ObjectGetInteger(0, name, OBJPROP_LEVELS);
+      if(nlev > MAX_LEVELS) nlev = MAX_LEVELS;
+
+      for(int L = 0; L < nlev; L++)
+      {
+         if(clr != TF_NO_COLOR && (int)ObjectGetInteger(0, name, OBJPROP_LEVELCOLOR, L) != clr)
+         {
+            ObjectSetInteger(0, name, OBJPROP_LEVELCOLOR, L, clr);
+            changed = true;
+         }
+         if(wid > 0 && (int)ObjectGetInteger(0, name, OBJPROP_LEVELWIDTH, L) != wid)
+         {
+            ObjectSetInteger(0, name, OBJPROP_LEVELWIDTH, L, wid);
+            changed = true;
+         }
+      }
+   }
+
+   ResetLastError();
+   return changed;
+}
+
+//+------------------------------------------------------------------+
+//| Per timeframe colour / thickness. None and 0 both mean            |
+//| "leave whatever the object already has".                          |
+//+------------------------------------------------------------------+
+int TfColor(const int tf)
+{
+   switch(tf)
+   {
+      case PERIOD_M1:  return (int)InpColorM1;
+      case PERIOD_M5:  return (int)InpColorM5;
+      case PERIOD_M15: return (int)InpColorM15;
+      case PERIOD_M30: return (int)InpColorM30;
+      case PERIOD_H1:  return (int)InpColorH1;
+      case PERIOD_H4:  return (int)InpColorH4;
+      case PERIOD_D1:  return (int)InpColorD1;
+      case PERIOD_W1:  return (int)InpColorW1;
+      case PERIOD_MN1: return (int)InpColorMN1;
+   }
+   return TF_NO_COLOR;
+}
+
+int TfWidth(const int tf)
+{
+   int w = 0;
+   switch(tf)
+   {
+      case PERIOD_M1:  w = InpWidthM1;  break;
+      case PERIOD_M5:  w = InpWidthM5;  break;
+      case PERIOD_M15: w = InpWidthM15; break;
+      case PERIOD_M30: w = InpWidthM30; break;
+      case PERIOD_H1:  w = InpWidthH1;  break;
+      case PERIOD_H4:  w = InpWidthH4;  break;
+      case PERIOD_D1:  w = InpWidthD1;  break;
+      case PERIOD_W1:  w = InpWidthW1;  break;
+      case PERIOD_MN1: w = InpWidthMN1; break;
+   }
+
+   if(w < 0) w = 0;
+   if(w > 5) w = 5;   // MT4 caps line thickness at 5
+   return w;
 }
 
 //+------------------------------------------------------------------+
@@ -700,7 +884,7 @@ string BuildSignature(const string name)
 //+------------------------------------------------------------------+
 string BuildRegistryLine(const string uid, const bool deleted,
                          const long rev, const string payload,
-                         const string originSym)
+                         const string originSym, const int originTf)
 {
    // The symbol written here is the symbol of the chart the object was DRAWN
    // on, never Symbol() of whoever happens to be republishing it. A chart
@@ -714,6 +898,13 @@ string BuildRegistryLine(const string uid, const bool deleted,
                + FIELD_SEP + IntegerToString(rev)
                + FIELD_SEP + IntegerToString((long)TimeCurrent())
                + FIELD_SEP + IntegerToString(g_chartId);
+
+   // Timeframe of the chart the object was DRAWN on. Like the symbol above it
+   // travels WITH the object and is never re-derived from whoever republishes
+   // it, otherwise a copy would take on the timeframe of the chart holding it.
+   // Tagged rather than positional so a line written by 1.02 (which has no
+   // such field) is still recognised - see ApplyRegistry.
+   line += FIELD_SEP + TF_TAG + IntegerToString(originTf <= 0 ? Period() : originTf);
 
    if(deleted)
       line += FIELD_SEP + "0" + FIELD_SEP + "0";   // placeholder type/pivots
@@ -836,7 +1027,7 @@ int FindLineByUid(string &lines[], const int count, const string uid)
 //+------------------------------------------------------------------+
 void AddManaged(const string uid, const string localName,
                 const string sig, const long rev, const bool isMirror,
-                const string originSym)
+                const string originSym, const int originTf)
 {
    ArrayResize(g_mgd, g_mgdCount + 1);
    g_mgd[g_mgdCount].uid       = uid;
@@ -845,6 +1036,7 @@ void AddManaged(const string uid, const string localName,
    g_mgd[g_mgdCount].rev       = rev;
    g_mgd[g_mgdCount].isMirror  = isMirror;
    g_mgd[g_mgdCount].originSym = (originSym == "" ? Symbol() : originSym);
+   g_mgd[g_mgdCount].originTf  = (originTf <= 0 ? Period() : originTf);
    g_mgdCount++;
 }
 
@@ -860,6 +1052,7 @@ void RemoveManagedAt(const int idx)
       g_mgd[i].rev       = g_mgd[i + 1].rev;
       g_mgd[i].isMirror  = g_mgd[i + 1].isMirror;
       g_mgd[i].originSym = g_mgd[i + 1].originSym;
+      g_mgd[i].originTf  = g_mgd[i + 1].originTf;
    }
 
    g_mgdCount--;
@@ -918,6 +1111,12 @@ void DropSuppress(const string uid)
 //+------------------------------------------------------------------+
 void Adopt(const string name)
 {
+   if(ObjectFind(0, name) < 0) return;
+
+   // Give it the local look straight away rather than a tick later, so a line
+   // you have just drawn does not visibly change colour a moment afterwards.
+   StyleLocal(name, Period());
+
    string sig = BuildSignature(name);
    if(sig == "") return;
 
@@ -930,7 +1129,7 @@ void Adopt(const string name)
    // the next sync cycle sees a difference and publishes the object. Storing
    // the real signature here would make it look already-in-sync and it would
    // never reach the other charts until you moved it.
-   AddManaged(uid, name, "", 0, false, Symbol());
+   AddManaged(uid, name, "", 0, false, Symbol(), Period());
 
    if(InpVerboseLog) Print("ObjectSync: adopted ", name, " as ", uid);
 }

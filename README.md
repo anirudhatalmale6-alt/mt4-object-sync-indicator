@@ -62,6 +62,29 @@ the ignore list and it is excluded outright.
 | Make copied objects non-selectable | `false` | On = copies are view-only and can only be edited on the chart you drew them. |
 | Keep delete records for N hours | `24` | How long a deletion is remembered, so a chart that was closed still picks it up when it reopens. |
 
+### Appearance
+
+| Setting | Default | What it does |
+|---|---|---|
+| Keep synced objects behind panels and dashboards | `true` | Puts every synced object in the chart background, so lines and boxes pass *behind* a dashboard or note panel instead of over the top of it. MT4 has no z-order for chart objects — background or foreground is the only control it gives you, and this sets it on every synced object so you never have to do it by hand. |
+| Colour / thickness by the timeframe drawn on | `true` | An object takes the colour and thickness of the timeframe of the chart you **drew** it on, on *every* chart. Draw a line on H1 and it is the H1 colour everywhere, so you can always tell which timeframe a level came from. |
+| Also recolour Fibo / Gann level lines | `false` | Off by default, so the standard Fibonacci level colours survive. On = the level lines take the timeframe colour too. |
+| M1 … MN colour | see below | One colour per timeframe. Set a colour to **None** to leave objects drawn on that timeframe in whatever colour you drew them. |
+| M1 … MN thickness | 1–3 | One line thickness per timeframe, in pixels, 1 to 5. Set it to `0` to leave the thickness alone. |
+
+Defaults: M1 grey, M5 silver, M15 aqua, M30 deep sky blue, H1 lime, H4 yellow,
+D1 orange, W1 red, MN magenta. Thickness 1 up to H1, 2 for H4 and D1, 3 for W1
+and MN.
+
+Two things worth knowing:
+
+* The colour is decided by the timeframe you **drew** on, not by the chart you
+  are looking at. That is what makes it useful — on your M15 chart a D1 level
+  is orange and an H1 level is lime.
+* While this is on, the timeframe colour replaces the colour you drew with, on
+  the original as well as the copies. Turn it off, or set that timeframe's
+  colour to None, to pick colours by hand instead.
+
 ### Safety
 
 | Setting | Default | What it does |
@@ -80,7 +103,8 @@ all the Fibonacci tools, Gann tools, Andrews pitchfork, cycle lines, text and
 every arrow type.
 
 Position, colour, style, width, ray settings, fill, text, font and all Fibo
-level values, colours and captions come across.
+level values, colours and captions come across. Colour and thickness are then
+overridden per timeframe if that option is on — see *Appearance* below.
 
 **Not synced:** screen-anchored things — labels, buttons, edit boxes, panels
 and bitmaps. Those are pinned to pixels rather than to a price and a time, so
@@ -122,14 +146,22 @@ reopen.
   separate* off. That is what it is for.
 * **A leftover copy is stuck on a chart** — reload the indicator, it is removed
   automatically. Otherwise Ctrl+B and delete anything starting with `OSync_`.
+* **An object is drawn over the top of my dashboard** — turn on *Keep synced
+  objects behind panels and dashboards*. Objects only move behind once the
+  indicator has seen them, so give it a second, or reload it.
+* **An object drawn by hand keeps changing colour** — that is *Colour /
+  thickness by the timeframe drawn on*. Turn it off to keep your own colours,
+  or set just that timeframe's colour to None.
 * **Anything else** — turn on *Write detail to the Experts log*, reproduce it,
   and send me the Experts tab contents.
 
 ---
 
-Version 1.02
+Version 1.03
 
 ## Changelog
+
+**1.03** - two additions. Synced objects can be forced into the chart background so they pass behind a dashboard or panel instead of over the top of it, which is the only control MT4 gives for that and previously had to be set object by object. And each timeframe now has its own colour and line thickness: an object takes the colour of the timeframe it was drawn on, on every chart, so an H1 level looks the same on your D1 chart as it does on H1. The timeframe travels with the object in the register rather than being read off whichever chart is showing it, so all charts agree on the colour. Register lines written by 1.02 are still read - objects from them simply keep the colour they were drawn with.
 
 **1.02** - symbol separation hardened. The origin symbol is now part of the object id itself and travels with the object, so a chart holding a copy can no longer re-stamp it with its own symbol - that was the one path by which an object could spread to another symbol. The symbol filter now trusts the id rather than the register column, symbol names are made file-name safe, and copies the register no longer accounts for are swept off the chart automatically, which clears any strays left by an earlier version. The register file format is unchanged.
 
