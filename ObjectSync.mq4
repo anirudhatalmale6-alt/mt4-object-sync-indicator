@@ -19,7 +19,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Custom Indicator"
 #property link      ""
-#property version   "1.03"
+#property version   "1.04"
 #property strict
 #property indicator_chart_window
 
@@ -42,17 +42,29 @@ input int    InpTombstoneHours     = 24;          // Keep delete records for N h
 //+------------------------------------------------------------------+
 //| APPEARANCE                                                        |
 //|                                                                   |
-//| Colour and thickness follow the timeframe the object was DRAWN on, |
-//| not the chart it is being shown on. Draw a line on H1 and it is    |
-//| the H1 colour on every chart, so you can always tell at a glance   |
-//| which timeframe a level came from.                                 |
+//| Each timeframe has its own colour and line thickness. Which of the |
+//| two below you pick decides what the colour tells you:              |
 //|                                                                   |
-//| Set a colour to None to leave objects from that timeframe in       |
+//|  THIS CHART  - every object on your H4 chart is the H4 colour, on  |
+//|                the D1 chart the D1 colour, and so on. The colour   |
+//|                tells you which chart you are looking at.           |
+//|  DRAWN ON    - an object keeps the colour of the timeframe it was  |
+//|                drawn on, on every chart. The colour tells you      |
+//|                which timeframe the level came from.                |
+//|                                                                   |
+//| Set a colour to None to leave objects on that timeframe in         |
 //| whatever colour you drew them. Set a thickness to 0 to leave the   |
 //| thickness alone.                                                  |
 //+------------------------------------------------------------------+
+enum ENUM_TF_STYLE_SOURCE
+{
+   TFSTYLE_CHART  = 0,   // Timeframe of the chart it is shown on
+   TFSTYLE_ORIGIN = 1    // Timeframe it was drawn on
+};
+
 input bool   InpDrawBehind         = true;        // Keep synced objects behind panels and dashboards
-input bool   InpUseTfStyle         = true;        // Colour / thickness by the timeframe drawn on
+input bool   InpUseTfStyle         = true;        // Use the per timeframe colours below
+input ENUM_TF_STYLE_SOURCE InpTfStyleSource = TFSTYLE_CHART;  // Colour follows
 input bool   InpTfStyleLevels      = false;       // Also recolour Fibo / Gann level lines
 
 input color  InpColorM1            = clrGray;         // M1  colour
@@ -167,7 +179,8 @@ int OnInit()
          "  channel=", InpChannelName, "  registry=", g_regFile,
          "  scope=", (InpSameSymbolOnly ? "THIS SYMBOL ONLY" : "ALL SYMBOLS SHARED"),
          "  background=", (InpDrawBehind ? "yes" : "no"),
-         "  timeframe colours=", (InpUseTfStyle ? "on" : "off"));
+         "  timeframe colours=", (!InpUseTfStyle ? "off"
+            : (InpTfStyleSource == TFSTYLE_CHART ? "this chart" : "drawn on")));
 
    return(INIT_SUCCEEDED);
 }
@@ -506,30 +519,39 @@ bool ApplyRegistry(string &lines[], const int lineCount)
          // Deleted here on purpose while deletion sync was off
          if(IsSuppressed(uid)) continue;
 
-         // Was this object originally drawn on THIS chart? After a reload
-         // the original is still on the chart but no longer registered,
-         // so re-attach to it instead of making a duplicate copy.
+         // Is the ORIGINAL of this line sitting on this chart? Then re-attach
+         // to it instead of building a copy next to it. This is the case after
+         // the indicator is reloaded, and after MT4 or the computer has been
+         // restarted - the objects you drew are saved with the chart and are
+         // still there, they are just no longer registered.
          //
-         // The origin comes from the uid, not from the owner field - owner
-         // is whoever wrote the line last, which may be a different chart
-         // if somebody dragged the copy over there.
-         if(OriginChartFromUid(uid) == g_chartId)
+         // Matched on the object NAME. NOT on the chart id: MT4 hands out
+         // fresh chart ids every time the terminal starts, so an id stored
+         // before a restart never matches again afterwards. Matching on it
+         // meant that after every restart a chart no longer recognised its own
+         // objects and built a COPY of each one alongside the original - one
+         // more copy on every restart, with the original left unsynced.
+         //
+         // The symbol still has to match, and the object must not already be
+         // spoken for by another registry line.
+         string original = OriginalNameFromUid(uid);
+         if(symbol == Symbol() && original != "" && ObjectFind(0, original) >= 0
+            && FindManagedByLocal(original) < 0)
          {
-            string original = OriginalNameFromUid(uid);
-            if(original != "" && ObjectFind(0, original) >= 0)
-            {
-               // Look enforced BEFORE the signature is taken. The stored
-               // signature has to match what the object actually looks like,
-               // otherwise the next cycle would read a difference and publish
-               // it at revision 1 - overwriting a higher revision that the
-               // other charts had produced while this one was closed.
-               StyleLocal(original, originTf);
+            // Look enforced BEFORE the signature is taken. The stored
+            // signature has to match what the object actually looks like,
+            // otherwise the next cycle would read a difference and publish
+            // it at revision 1 - overwriting a higher revision that the
+            // other charts had produced while this one was closed.
+            StyleLocal(original, originTf);
 
-               // rev 0 so that whatever is in the registry wins on the next
-               // pass - the other charts may have moved it while we were off
-               AddManaged(uid, original, BuildSignature(original), 0, false, symbol, originTf);
-               continue;
-            }
+            // rev 0 so that whatever is in the registry wins on the next
+            // pass - the other charts may have moved it while we were off
+            AddManaged(uid, original, BuildSignature(original), 0, false, symbol, originTf);
+
+            if(InpVerboseLog)
+               Print("ObjectSync: re-attached to own object ", original, " (", uid, ")");
+            continue;
          }
 
          // Build a copy of somebody else's object
@@ -714,10 +736,15 @@ bool ApplyLine(const string name, string &parts[], const int n,
 //|    dashboard or panel instead of over the top of it. MT4 has no    |
 //|    z-order for chart objects - background or foreground is the     |
 //|    only control there is.                                          |
-//|  * the colour and thickness for the timeframe the object was DRAWN |
-//|    on. Every chart works this out from the same origin timeframe,  |
-//|    so every chart lands on the same colour and the setting cannot  |
-//|    start a tug of war between charts.                              |
+//|  * the colour and thickness for a timeframe - either this chart's  |
+//|    own timeframe, or the one the object was drawn on.               |
+//|                                                                   |
+//| Either way this runs LOCALLY on every chart and always AFTER the   |
+//| registry line has been applied, so the colour a chart shows is its |
+//| own business. Two charts can hold the same object in two different |
+//| colours without either of them fighting the other, because the     |
+//| stored signature is always taken after this has run - see the      |
+//| callers.                                                          |
 //|                                                                   |
 //| Returns true if anything actually changed.                        |
 //+------------------------------------------------------------------+
@@ -733,11 +760,13 @@ bool StyleLocal(const string name, const int originTf)
       changed = true;
    }
 
-   if(!InpUseTfStyle || originTf <= 0)
+   int tf = (InpTfStyleSource == TFSTYLE_CHART ? Period() : originTf);
+
+   if(!InpUseTfStyle || tf <= 0)
       return changed;
 
-   int clr = TfColor(originTf);
-   int wid = TfWidth(originTf);
+   int clr = TfColor(tf);
+   int wid = TfWidth(tf);
 
    if(clr != TF_NO_COLOR && (int)ObjectGetInteger(0, name, OBJPROP_COLOR) != clr)
    {
@@ -1393,19 +1422,10 @@ string OriginalNameFromUid(const string uid)
    return StringSubstr(uid, at + 1);
 }
 
-long OriginChartFromUid(const string uid)
-{
-   int at = StringFind(uid, "@");
-   if(at < 0) return 0;
-
-   string head = StringSubstr(uid, 0, at);   // "<symbol>#<chartId>" or "<chartId>"
-
-   int hash = LastHash(head);
-   if(hash >= 0)
-      head = StringSubstr(head, hash + 1);
-
-   return StringToInteger(head);
-}
+// The chart id in a uid is there to keep uids unique. It is deliberately NOT
+// used to decide which chart owns an object: MT4 issues new chart ids on every
+// terminal start, so it is worthless after a restart. Ownership is decided by
+// the object name - see ApplyRegistry.
 
 //+------------------------------------------------------------------+
 //| Origin symbol out of a uid. Empty for pre-1.02 uids.              |

@@ -67,7 +67,8 @@ the ignore list and it is excluded outright.
 | Setting | Default | What it does |
 |---|---|---|
 | Keep synced objects behind panels and dashboards | `true` | Puts every synced object in the chart background, so lines and boxes pass *behind* a dashboard or note panel instead of over the top of it. MT4 has no z-order for chart objects — background or foreground is the only control it gives you, and this sets it on every synced object so you never have to do it by hand. |
-| Colour / thickness by the timeframe drawn on | `true` | An object takes the colour and thickness of the timeframe of the chart you **drew** it on, on *every* chart. Draw a line on H1 and it is the H1 colour everywhere, so you can always tell which timeframe a level came from. |
+| Use the per timeframe colours below | `true` | Master switch for the colour and thickness table. Off = objects keep the colour you drew them with. |
+| Colour follows | *Timeframe of the chart it is shown on* | **Timeframe of the chart it is shown on** — every object on your H4 chart is the H4 colour, on the D1 chart the D1 colour. The colour tells you which chart you are looking at. **Timeframe it was drawn on** — an object keeps the colour of the timeframe you drew it on, on every chart. The colour tells you which timeframe a level came from. |
 | Also recolour Fibo / Gann level lines | `false` | Off by default, so the standard Fibonacci level colours survive. On = the level lines take the timeframe colour too. |
 | M1 … MN colour | see below | One colour per timeframe. Set a colour to **None** to leave objects drawn on that timeframe in whatever colour you drew them. |
 | M1 … MN thickness | 1–3 | One line thickness per timeframe, in pixels, 1 to 5. Set it to `0` to leave the thickness alone. |
@@ -76,14 +77,14 @@ Defaults: M1 grey, M5 silver, M15 aqua, M30 deep sky blue, H1 lime, H4 yellow,
 D1 orange, W1 red, MN magenta. Thickness 1 up to H1, 2 for H4 and D1, 3 for W1
 and MN.
 
-Two things worth knowing:
+While this is on, the timeframe colour replaces the colour you drew with, on
+the original as well as the copies. Turn it off, or set that timeframe's colour
+to None, to pick colours by hand instead.
 
-* The colour is decided by the timeframe you **drew** on, not by the chart you
-  are looking at. That is what makes it useful — on your M15 chart a D1 level
-  is orange and an H1 level is lime.
-* While this is on, the timeframe colour replaces the colour you drew with, on
-  the original as well as the copies. Turn it off, or set that timeframe's
-  colour to None, to pick colours by hand instead.
+The colour is a per-chart decision, applied after a change arrives from another
+chart. Two charts can therefore show the same object in two different colours
+without fighting each other over it — dragging a line on H4 moves it on every
+chart without pushing H4's colour anywhere.
 
 ### Safety
 
@@ -146,6 +147,10 @@ reopen.
   separate* off. That is what it is for.
 * **A leftover copy is stuck on a chart** — reload the indicator, it is removed
   automatically. Otherwise Ctrl+B and delete anything starting with `OSync_`.
+* **Two of every line after a restart** — that was version 1.03 and earlier;
+  1.04 fixes the cause. Doubles already created do not clean themselves up:
+  remove the indicator from every chart, delete `MQL4/Files/ObjSync_*.csv`,
+  delete the spare lines by hand, then put the indicator back.
 * **An object is drawn over the top of my dashboard** — turn on *Keep synced
   objects behind panels and dashboards*. Objects only move behind once the
   indicator has seen them, so give it a second, or reload it.
@@ -157,9 +162,11 @@ reopen.
 
 ---
 
-Version 1.03
+Version 1.04
 
 ## Changelog
+
+**1.04** - objects now survive a restart of MT4 or of the computer without doubling up. Ownership of an object used to be re-established through MT4's chart id, but MT4 issues fresh chart ids every time the terminal starts, so after a restart a chart no longer recognised its own objects and built a copy of each one alongside the original, once per restart, leaving the original unsynced. Ownership is now decided by the object name, which the chart keeps across a restart. Also added a choice for what the timeframe colour means: the timeframe of the chart the object is shown on (new default - every object on your H4 chart is the H4 colour), or the timeframe it was drawn on (1.03 behaviour).
 
 **1.03** - two additions. Synced objects can be forced into the chart background so they pass behind a dashboard or panel instead of over the top of it, which is the only control MT4 gives for that and previously had to be set object by object. And each timeframe now has its own colour and line thickness: an object takes the colour of the timeframe it was drawn on, on every chart, so an H1 level looks the same on your D1 chart as it does on H1. The timeframe travels with the object in the register rather than being read off whichever chart is showing it, so all charts agree on the colour. Register lines written by 1.02 are still read - objects from them simply keep the colour they were drawn with.
 
