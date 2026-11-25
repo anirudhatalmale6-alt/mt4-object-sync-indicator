@@ -19,7 +19,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Custom Indicator"
 #property link      ""
-#property version   "1.04"
+#property version   "1.05"
 #property strict
 #property indicator_chart_window
 
@@ -37,6 +37,7 @@ input int    InpTimerMs            = 400;         // Refresh interval (milliseco
 input bool   InpSyncDeletions      = true;        // Deleting an object deletes it on all charts
 input bool   InpAdoptExistingOnLoad= false;       // Adopt objects already on the chart at load
 input bool   InpLockMirrors        = false;       // Make copied objects non-selectable (read only)
+input bool   InpShowSyncedObjects  = true;        // Show objects drawn on OTHER charts here (false = hide them on this chart only)
 input int    InpTombstoneHours     = 24;          // Keep delete records for N hours
 
 //+------------------------------------------------------------------+
@@ -754,6 +755,16 @@ bool StyleLocal(const string name, const int originTf)
 
    bool changed = false;
 
+   // Per chart: hide the copies of other charts' drawings on THIS chart only.
+   // They still exist and keep updating, so syncing carries on for every
+   // chart. Visibility is not part of the signature, so it never spreads.
+   if(StringFind(name, MIRROR_PREFIX) == 0)
+   {
+      long want = InpShowSyncedObjects ? OBJ_ALL_PERIODS : OBJ_NO_PERIODS;
+      if(ObjectGetInteger(0, name, OBJPROP_TIMEFRAMES) != want)
+         ObjectSetInteger(0, name, OBJPROP_TIMEFRAMES, want);
+   }
+
    if(InpDrawBehind && ObjectGetInteger(0, name, OBJPROP_BACK) == 0)
    {
       ObjectSetInteger(0, name, OBJPROP_BACK, true);
@@ -983,8 +994,7 @@ int ReadRegistry(string &lines[])
    while(!FileIsEnding(h))
    {
       string line = FileReadString(h);
-      StringTrimLeft(line);
-      StringTrimRight(line);
+      line = StringTrimLeft(StringTrimRight(line));   // MQL4 returns the trimmed copy
       if(StringLen(line) < 6) continue;
 
       ArrayResize(lines, count + 1);
@@ -1224,8 +1234,7 @@ void ParseIgnoreList()
    for(int i = 0; i < n; i++)
    {
       string p = parts[i];
-      StringTrimLeft(p);
-      StringTrimRight(p);
+      p = StringTrimLeft(StringTrimRight(p));   // MQL4 returns the trimmed copy
       if(StringLen(p) == 0) continue;
 
       ArrayResize(g_ignore, g_ignoreCount + 1);
